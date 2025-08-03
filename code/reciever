@@ -1,0 +1,77 @@
+#include <ESP8266WiFi.h>
+#include <ESP8266WebServer.h>
+#include <SoftwareSerial.h>
+
+ESP8266WebServer server(80);
+
+const int relayPin = D1;
+const char* ssid = "Your_WiFi_Name";
+const char* password = "Your_WiFi_Password";
+
+// GPS
+SoftwareSerial gpsSerial(D5, D6); // RX, TX
+String latitude = "0.0";
+String longitude = "0.0";
+
+void setup() {
+  Serial.begin(115200);
+  gpsSerial.begin(9600);
+  pinMode(relayPin, OUTPUT);
+  digitalWrite(relayPin, HIGH); // bike ON
+
+  WiFi.begin(ssid, password);
+  while (WiFi.status() != WL_CONNECTED) delay(500);
+
+  server.on("/data", HTTP_POST, handleData);
+  server.begin();
+}
+
+void loop() {
+  server.handleClient();
+  updateGPS(); // fetch latest GPS data
+}
+
+void handleData() {
+  bool alcohol = server.arg("alcohol") == "1";
+  bool fall = server.arg("fall") == "1";
+
+  if (alcohol) {
+    digitalWrite(relayPin, LOW); // turn OFF bike
+  }
+
+  if (fall) {
+    sendSMS(latitude, longitude);
+  }
+
+  server.send(200, "text/plain", "Data received");
+}
+
+void updateGPS() {
+  while (gpsSerial.available()) {
+    String line = gpsSerial.readStringUntil('\n');
+    if (line.startsWith("$GPGGA")) {
+      int commaIndex = line.indexOf(',');
+      // (you can extract lat/lon here, or use TinyGPS++)
+      latitude = "12.9716"; // example dummy lat
+      longitude = "77.5946"; // example dummy lon
+    }
+  }
+}
+
+void sendSMS(String lat, String lon) {
+  WiFiClientSecure client;
+  client.setInsecure();
+
+  if (!client.connect("api.twilio.com", 443)) return;
+
+  String message = "Accident detected! Location: https://maps.google.com/?q=" + lat + "," + lon;
+  String payload = "To=+91XXXXXXXXXX&From=+1XXXXXXXXXX&Body=" + message;
+
+  String auth = base64::encode("TWILIO_SID:TWILIO_AUTH_TOKEN");
+  client.print(String("POST ") + "/2010-04-01/Accounts/TWILIO_SID/Messages.json HTTP/1.1\r\n" +
+               "Host: api.twilio.com\r\n" +
+               "Authorization: Basic " + auth + "\r\n" +
+               "Content-Type: application/x-www-form-urlencoded\r\n" +
+               "Content-Length: " + payload.length() + "\r\n\r\n" +
+               payload);
+}
